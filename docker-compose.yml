@@ -1,0 +1,177 @@
+# SK-03 local batch data platform
+# Start:  docker compose up -d
+# Stop:   docker compose down          (keeps data)
+# Reset:  docker compose down -v       (DELETES all data volumes)
+
+x-airflow-common: &airflow-common
+  build: ./docker
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: utc
+    # MinIO credentials — in real production these come from a secrets manager,
+    # never from a compose file. See "Production Engineering Practices" below.
+    MINIO_ENDPOINT: http://minio:9000
+    MINIO_ACCESS_KEY: minioadmin
+    MINIO_SECRET_KEY: minioadmin123
+    WAREHOUSE_HOST: warehouse
+    WAREHOUSE_PORT: "5432"
+    WAREHOUSE_DB: warehouse
+    WAREHOUSE_USER: dwh_user
+    WAREHOUSE_PASSWORD: dwh_pass
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./jobs:/opt/airflow/jobs
+    - ./dbt:/opt/airflow/dbt
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/shared_config
+  depends_on:
+    airflow-db:
+      condition: service_healthy
+
+services:
+
+  # ------------------------------------------------------------------
+  # MinIO — S3-compatible object storage. Simulates Amazon S3 locally.
+  # API on 9000 (what code talks to), web console on 9001 (what YOU use).
+  # ------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # Airflow's internal metadata database. Airflow stores DAG runs,
+  # task states, connections, and variables here. You never query it.
+  # ------------------------------------------------------------------
+  airflow-db:
+    image: postgres:16
+    container_name: airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # The analytics WAREHOUSE — where dbt builds models and analysts query.
+  # In production this would be Redshift/Snowflake/BigQuery.
+  # Exposed on host port 5433 so you can connect with any SQL client.
+  # ------------------------------------------------------------------
+  warehouse:
+    image: postgres:16
+    container_name: warehouse
+    environment:
+      POSTGRES_USER: dwh_user
+      POSTGRES_PASSWORD: dwh_pass
+      POSTGRES_DB: warehouse
+    ports:
+      - "5433:5432"
+    volumes:
+      - warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dwh_user -d warehouse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # Spark master — coordinates work. Web UI on host port 8081.
+  # ------------------------------------------------------------------
+  spark-master:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-master
+    environment:
+      SPARK_MODE: master
+    ports:
+      - "8081:8080"   # Spark master web UI (8080 inside; 8081 on your machine
+                      # because Airflow's UI takes 8080)
+      - "7077:7077"   # where workers and jobs connect
+    volumes:
+      - ./jobs:/opt/jobs
+      - ./data:/opt/data
+
+  # ------------------------------------------------------------------
+  # Spark worker — does the actual data processing.
+  # ------------------------------------------------------------------
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-worker
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: "2"
+    depends_on:
+      - spark-master
+    volumes:
+      - ./jobs:/opt/jobs
+      - ./data:/opt/data
+
+  # ------------------------------------------------------------------
+  # Airflow: one-time init (creates DB tables + admin user), then
+  # webserver (UI on 8080) and scheduler (runs your DAGs).
+  # ------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin --password admin \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  minio-data:
+  airflow-db-data:
+  warehouse-data:
