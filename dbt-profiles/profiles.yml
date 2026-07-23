@@ -1,0 +1,14 @@
+# Used by Airflow containers (host 'warehouse' on the compose network).
+# Local CLI from the host: use ~/.dbt/profiles.yml with localhost + mapped port.
+freshflow_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: warehouse
+      port: 5432
+      user: dwh_user
+      password: dwh_pass
+      dbname: warehouse
+      schema: analytics
+      threads: 4

@@ -1,5 +1,5 @@
-SQLAlchemy                   2.0.51
-pyarrow                      25.0.0
-pandas                       3.0.3
-numpy                        2.5.1
-dbt-postgres                 1.11.0
+SQLAlchemy==2.0.51
+pyarrow==25.0.0
+pandas==3.0.3
+numpy==2.5.1
+dbt-postgres==1.11.0

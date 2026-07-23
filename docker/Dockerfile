@@ -18,5 +18,6 @@ ARG PYTHON_VERSION=3.11
 RUN pip install --no-cache-dir \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
     pyspark==3.5.1 \
-    dbt-postgres==1.8.2 \
+    "dbt-core==1.8.7" \
+    "dbt-postgres==1.8.2" \
     apache-airflow-providers-amazon==8.25.0

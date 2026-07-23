@@ -24,7 +24,8 @@ x-airflow-common: &airflow-common
   volumes:
     - ./dags:/opt/airflow/dags
     - ./jobs:/opt/airflow/jobs
-    - ./dbt:/opt/airflow/dbt
+    - ./dbt/freshflow_analytics:/opt/airflow/dbt/freshflow_analytics
+    - ./dbt-profiles:/opt/airflow/dbt   # profiles.yml: host warehouse, port 5432
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./config:/opt/airflow/shared_config

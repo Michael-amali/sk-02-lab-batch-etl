@@ -1,4 +1,4 @@
-"""UrbanGear nightly orders pipeline: wait -> clean (Spark) -> verify.
+"""UrbanGear nightly orders pipeline: wait -> clean (Spark) -> verify -> load -> dbt.
 Every task is a pure function of {{ ds }} => idempotent, backfillable."""
 from datetime import datetime, timedelta
 from airflow import DAG
@@ -12,6 +12,20 @@ def _on_failure(context):
     print(f"[ALERT] task={ti.task_id} dag={ti.dag_id} ds={context['ds']} FAILED "
           f"after {ti.try_number - 1} attempts. Log: {ti.log_url}")
 
+def _verify_output(**context):
+    """Trust nothing: confirm the partition exists and has rows."""
+    import sys; sys.path.insert(0, "/opt/airflow/jobs")
+    from spark_common import get_spark
+    ds = context["ds"]
+    spark = get_spark(f"verify-{ds}")
+    n = spark.read.parquet(
+        f"s3a://urbangear-processed/processed/orders/date={ds}/").count()
+    spark.stop()
+    if n == 0:
+        raise ValueError(f"output partition for {ds} is EMPTY")
+    print(f"[verify] date={ds} clean_rows={n} OK")
+
+
 default_args = {
     "owner": "data-eng",
     "retries": 2,
@@ -19,6 +33,7 @@ default_args = {
     "retry_exponential_backoff": True,      # 1 min, then 2 min
     "on_failure_callback": _on_failure,
 }
+
 
 with DAG(
     dag_id="urbangear_orders_pipeline",
@@ -42,28 +57,29 @@ with DAG(
         retries=0,                   # a sensor timeout is real news — don't retry it
     )
 
-
     clean_orders = BashOperator(
         task_id="clean_orders",
         bash_command="python /opt/airflow/jobs/clean_orders.py {{ ds }}",
     )
-
-    def _verify_output(**context):
-        """Trust nothing: confirm the partition exists and has rows."""
-        import sys; sys.path.insert(0, "/opt/airflow/jobs")
-        from spark_common import get_spark
-        ds = context["ds"]
-        spark = get_spark(f"verify-{ds}")
-        n = spark.read.parquet(
-            f"s3a://urbangear-processed/processed/orders/date={ds}/").count()
-        spark.stop()
-        if n == 0:
-            raise ValueError(f"output partition for {ds} is EMPTY")
-        print(f"[verify] date={ds} clean_rows={n} OK")
 
     verify_output = PythonOperator(
         task_id="verify_output",
         python_callable=_verify_output,
     )
 
-    wait_for_file >> clean_orders >> verify_output
+    load_to_warehouse = BashOperator(
+        task_id="load_to_warehouse",
+        bash_command="python /opt/airflow/jobs/load_to_warehouse.py {{ ds }}",
+    )
+
+    dbt_run = BashOperator(
+        task_id="dbt_run",
+        bash_command="cd /opt/airflow/dbt/freshflow_analytics && dbt run --profiles-dir /opt/airflow/dbt",
+    )
+
+    dbt_test = BashOperator(
+        task_id="dbt_test",
+        bash_command="cd /opt/airflow/dbt/freshflow_analytics && dbt test --profiles-dir /opt/airflow/dbt",
+    )
+
+    wait_for_file >> clean_orders >> verify_output >> load_to_warehouse >> dbt_run >> dbt_test
