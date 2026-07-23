@@ -88,7 +88,7 @@ services:
       POSTGRES_PASSWORD: dwh_pass
       POSTGRES_DB: warehouse
     ports:
-      - "5433:5432"
+      - "5434:5432"   # 5433 is taken by local PostgreSQL 18 on this machine
     volumes:
       - warehouse-data:/var/lib/postgresql/data
     healthcheck:

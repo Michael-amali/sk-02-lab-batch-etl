@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: fct_daily_store_sales
+    description: "Daily revenue per store — feeds the ops dashboard"
+    columns:
+      - name: revenue
+        tests:
+          - not_null
+      - name: store_id
+        tests:
+          - not_null

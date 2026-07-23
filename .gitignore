@@ -1,4 +1,4 @@
-.urban_venv/
+.sk03_batch_etl_env/
 __pycache__/
 *.py[cod]s
 .pytest_cache/

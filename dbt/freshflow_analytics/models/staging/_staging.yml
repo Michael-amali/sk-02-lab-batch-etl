@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: stg_sales
+    description: "Sales order lines: typed, renamed, one row per order line"
+    columns:
+      - name: order_id
+        tests: [not_null]
+      - name: quantity
+        tests: [not_null]
